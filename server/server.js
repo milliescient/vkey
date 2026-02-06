@@ -91,6 +91,22 @@ const KEY_MAP = {
   Equal: "equal",
 };
 
+// Raw character → xdotool keysym name (fallback when client sends char, not code)
+const CHAR_TO_XKEY = {
+  ";": "semicolon",
+  "'": "apostrophe",
+  ",": "comma",
+  ".": "period",
+  "/": "slash",
+  "\\": "backslash",
+  "[": "bracketleft",
+  "]": "bracketright",
+  "`": "grave",
+  "-": "minus",
+  "=": "equal",
+  " ": "space",
+};
+
 // Modifier-only codes we should ignore as standalone keystrokes
 const MODIFIER_CODES = new Set([
   "ShiftLeft",
@@ -130,9 +146,9 @@ function buildXdotoolKey(msg) {
     else if (msg.code && msg.code.startsWith("Digit")) {
       xkey = msg.code.slice(5);
     }
-    // Fallback: use the key value directly if it's a single char
+    // Fallback: translate raw char to xdotool keysym name
     else if (msg.key && msg.key.length === 1) {
-      xkey = msg.key;
+      xkey = CHAR_TO_XKEY[msg.key] || msg.key;
     } else {
       return null; // Unknown key, skip
     }
@@ -147,14 +163,26 @@ function buildXdotoolKey(msg) {
 }
 
 function sendKeystroke(combo) {
-  // For single printable chars with no modifiers, use 'xdotool key' too
-  // (xdotool type has issues with special chars and doesn't work for shortcuts)
   const env = { ...process.env, DISPLAY, XAUTHORITY };
-  execFile("xdotool", ["key", "--clearmodifiers", combo], { env }, (err) => {
-    if (err) {
-      console.error(`  xdotool error: ${err.message}`);
-    }
-  });
+  const parts = combo.split("+");
+
+  // For modifier combos, use explicit keydown/keyup sequence so X11 clients
+  // (especially Electron/VSCode) see proper separate events
+  if (parts.length > 1) {
+    const modifiers = parts.slice(0, -1);
+    const key = parts[parts.length - 1];
+    const args = [];
+    for (const mod of modifiers) args.push("keydown", mod);
+    args.push("key", key);
+    for (const mod of modifiers.reverse()) args.push("keyup", mod);
+    execFile("xdotool", args, { env }, (err) => {
+      if (err) console.error(`  xdotool error: ${err.message}`);
+    });
+  } else {
+    execFile("xdotool", ["key", combo], { env }, (err) => {
+      if (err) console.error(`  xdotool error: ${err.message}`);
+    });
+  }
 }
 
 // --- Server ---
