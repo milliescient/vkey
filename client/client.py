@@ -92,7 +92,7 @@ def keysym_to_code(keysym, char):
         return f"Digit{keysym}"
     # If the char is printable and single, use keysym as-is (server will handle)
     if char and len(char) == 1 and char.isprintable():
-        return f"Key{char.upper()}" if char.isalpha() else None
+        return f"Key{char.upper()}" if char.isalpha() else keysym
     return None
 
 
@@ -316,10 +316,18 @@ class VKeyboardApp:
         self.text.bind("<KeyPress>", self._on_key_press)
         # Prevent default text widget behavior for modifier combos
         # so we don't get stray characters
+        punct_keys = [
+            "semicolon", "apostrophe", "comma", "period", "slash",
+            "backslash", "bracketleft", "bracketright", "grave",
+            "minus", "equal",
+        ]
         for mod in ("Command", "Control"):
-            for ch in "acvxzspfnbdewrtyhkl/":
+            for ch in "acvxzspfnbdewrtyhkl/0123456789":
                 self.text.bind(f"<{mod}-{ch}>", self._on_key_press)
                 self.text.bind(f"<{mod}-Shift-{ch}>", self._on_key_press)
+            for key in punct_keys:
+                self.text.bind(f"<{mod}-{key}>", self._on_key_press)
+                self.text.bind(f"<{mod}-Shift-{key}>", self._on_key_press)
 
     def _on_key_press(self, event):
         self._clear_placeholder()
