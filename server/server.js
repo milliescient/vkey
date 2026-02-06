@@ -1,8 +1,35 @@
 const { WebSocketServer } = require("ws");
 const { execFile } = require("child_process");
 
+const { readdirSync, existsSync } = require("fs");
+
 const PORT = parseInt(process.env.PORT || "9876", 10);
-const DISPLAY = process.env.DISPLAY || ":0";
+
+// Auto-detect X11 display from /tmp/.X11-unix if not set
+function detectDisplay() {
+  if (process.env.DISPLAY) return process.env.DISPLAY;
+  try {
+    const sockets = readdirSync("/tmp/.X11-unix");
+    const num = sockets.find((s) => s.startsWith("X"));
+    if (num) return `:${num.slice(1)}`;
+  } catch {}
+  return ":0";
+}
+
+// Auto-detect Xauthority file if not set
+function detectXauthority() {
+  if (process.env.XAUTHORITY) return process.env.XAUTHORITY;
+  const uid = process.getuid?.() ?? 1000;
+  const candidates = [
+    `/run/user/${uid}/gdm/Xauthority`,
+    `${process.env.HOME}/.Xauthority`,
+    `/var/run/lightdm/${process.env.USER}/xauthority`,
+  ];
+  return candidates.find((p) => existsSync(p)) || "";
+}
+
+const DISPLAY = detectDisplay();
+const XAUTHORITY = detectXauthority();
 
 // Map browser KeyboardEvent.code / key values to xdotool key names
 const KEY_MAP = {
@@ -122,7 +149,7 @@ function buildXdotoolKey(msg) {
 function sendKeystroke(combo) {
   // For single printable chars with no modifiers, use 'xdotool key' too
   // (xdotool type has issues with special chars and doesn't work for shortcuts)
-  const env = { ...process.env, DISPLAY };
+  const env = { ...process.env, DISPLAY, XAUTHORITY };
   execFile("xdotool", ["key", "--clearmodifiers", combo], { env }, (err) => {
     if (err) {
       console.error(`  xdotool error: ${err.message}`);
@@ -135,7 +162,7 @@ function sendKeystroke(combo) {
 const wss = new WebSocketServer({ host: "0.0.0.0", port: PORT });
 
 console.log(`vkeyboard server listening on 0.0.0.0:${PORT}`);
-console.log(`Using X11 display: ${DISPLAY}`);
+console.log(`Using X11 display: ${DISPLAY}${XAUTHORITY ? `, auth: ${XAUTHORITY}` : ""}`);
 console.log("Waiting for connections...\n");
 
 wss.on("connection", (ws, req) => {
