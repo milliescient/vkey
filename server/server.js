@@ -105,7 +105,38 @@ const CHAR_TO_XKEY = {
   "-": "minus",
   "=": "equal",
   " ": "space",
+  // Shifted punctuation
+  "?": "question",
+  ":": "colon",
+  '"': "quotedbl",
+  "<": "less",
+  ">": "greater",
+  "{": "braceleft",
+  "}": "braceright",
+  "|": "bar",
+  "~": "asciitilde",
+  "!": "exclam",
+  "@": "at",
+  "#": "numbersign",
+  "$": "dollar",
+  "%": "percent",
+  "^": "asciicircum",
+  "&": "ampersand",
+  "*": "asterisk",
+  "(": "parenleft",
+  ")": "parenright",
+  "_": "underscore",
+  "+": "plus",
 };
+
+// Keysyms that already represent shifted characters — don't add shift again
+const SHIFTED_KEYSYMS = new Set([
+  "question", "colon", "quotedbl", "less", "greater",
+  "braceleft", "braceright", "bar", "asciitilde",
+  "exclam", "at", "numbersign", "dollar", "percent",
+  "asciicircum", "ampersand", "asterisk", "parenleft",
+  "parenright", "underscore", "plus",
+]);
 
 // Modifier-only codes we should ignore as standalone keystrokes
 const MODIFIER_CODES = new Set([
@@ -154,9 +185,13 @@ function buildXdotoolKey(msg) {
     }
   }
 
-  // If there are modifiers, use xdotool key with combo notation
-  if (modifiers.length > 0) {
-    return [...modifiers, xkey].join("+");
+  // Strip shift if the keysym already represents the shifted character
+  const finalMods = SHIFTED_KEYSYMS.has(xkey)
+    ? modifiers.filter((m) => m !== "shift")
+    : modifiers;
+
+  if (finalMods.length > 0) {
+    return [...finalMods, xkey].join("+");
   }
 
   return xkey;
