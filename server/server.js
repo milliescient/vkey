@@ -2,6 +2,7 @@ const { WebSocketServer } = require("ws");
 const { execFile } = require("child_process");
 
 const PORT = parseInt(process.env.PORT || "9876", 10);
+const DISPLAY = process.env.DISPLAY || ":0";
 
 // Map browser KeyboardEvent.code / key values to xdotool key names
 const KEY_MAP = {
@@ -121,7 +122,8 @@ function buildXdotoolKey(msg) {
 function sendKeystroke(combo) {
   // For single printable chars with no modifiers, use 'xdotool key' too
   // (xdotool type has issues with special chars and doesn't work for shortcuts)
-  execFile("xdotool", ["key", "--clearmodifiers", combo], (err) => {
+  const env = { ...process.env, DISPLAY };
+  execFile("xdotool", ["key", "--clearmodifiers", combo], { env }, (err) => {
     if (err) {
       console.error(`  xdotool error: ${err.message}`);
     }
@@ -133,6 +135,7 @@ function sendKeystroke(combo) {
 const wss = new WebSocketServer({ host: "0.0.0.0", port: PORT });
 
 console.log(`vkeyboard server listening on 0.0.0.0:${PORT}`);
+console.log(`Using X11 display: ${DISPLAY}`);
 console.log("Waiting for connections...\n");
 
 wss.on("connection", (ws, req) => {
