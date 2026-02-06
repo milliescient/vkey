@@ -6,7 +6,8 @@ over WebSocket to the vkeyboard server running on a remote Linux machine.
 Only sends keystrokes when the window is focused.
 
 Usage:
-    pip3 install websockets
+    ./setup.sh client        # one-time setup (creates venv, installs deps)
+    source .venv/bin/activate
     python3 client.py [host:port]
 """
 
