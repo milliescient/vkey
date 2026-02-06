@@ -193,9 +193,10 @@ class VKeyboardApp:
             side=tk.LEFT
         )
 
-        default_host = "192.168.1.85:9876"
-        if len(sys.argv) > 1:
-            default_host = sys.argv[1]
+        if len(sys.argv) < 2:
+            print("Usage: client.py <host:port>")
+            sys.exit(1)
+        default_host = sys.argv[1]
 
         self.host_var = tk.StringVar(value=default_host)
         self.host_entry = tk.Entry(
