@@ -176,13 +176,16 @@ class VKeyboardApp:
         self.transport = JsonTransport()
         self.transport.on_status_change = self._on_status_change
 
-        self._mouse_enabled = False   # user intent (F9 toggle)
+        self._mouse_enabled = False
         self._mouse_last_pos = None
 
         self._build_ui()
         self._bind_keys()
         self.root.bind("<FocusOut>", self._on_focus_out)
         self.root.bind("<FocusIn>", self._on_focus_in)
+
+        # Enable mouse capture by default
+        self._toggle_mouse()
 
     def _build_ui(self):
         r = self.root
@@ -278,7 +281,7 @@ class VKeyboardApp:
 
         self.mouse_btn = tk.Button(
             bottom,
-            text="Mouse (F9)",
+            text="Mouse (Ctrl+Esc)",
             font=tkfont.Font(family="Menlo", size=10),
             bg="#333",
             fg="#aaa",
@@ -333,8 +336,9 @@ class VKeyboardApp:
     def _bind_keys(self):
         # Bind to the text widget so it only fires when the window is focused
         self.text.bind("<KeyPress>", self._on_key_press)
-        # F9 toggles mouse capture (bound specifically so it overrides KeyPress)
-        self.text.bind("<F9>", self._toggle_mouse)
+        # Ctrl+Escape toggles mouse capture
+        self.text.bind("<Control-Escape>", self._toggle_mouse)
+        self.root.bind("<Control-Escape>", self._toggle_mouse)
         # Prevent default text widget behavior for modifier combos
         # so we don't get stray characters
         punct_keys = [
@@ -367,7 +371,7 @@ class VKeyboardApp:
         else:
             self._unbind_mouse_clicks()
             self.text.config(cursor="xterm")
-            self.mouse_btn.config(bg="#333", fg="#aaa", text="Mouse (F9)")
+            self.mouse_btn.config(bg="#333", fg="#aaa", text="Mouse (Ctrl+Esc)")
         return "break"
 
     def _bind_mouse_clicks(self):
