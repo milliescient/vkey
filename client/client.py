@@ -355,34 +355,46 @@ class VKeyboardApp:
                 self.text.bind(f"<{mod}-Shift-{key}>", self._on_key_press)
 
     def _on_focus_out(self, event):
-        self._unbind_mouse_clicks()
+        pass  # global grab keeps mouse captured across focus changes
 
     def _on_focus_in(self, event):
         if self._mouse_enabled:
-            self._bind_mouse_clicks()
+            try:
+                self.root.grab_set_global()
+            except tk.TclError:
+                pass
 
     def _toggle_mouse(self, event=None):
         self._mouse_enabled = not self._mouse_enabled
         if self._mouse_enabled:
-            self._bind_mouse_clicks()
+            self._capture_mouse()
             self.mouse_btn.config(bg="#6c2020", fg="#fff", text="Mouse ON")
             self._mouse_last_pos = None
             self._mouse_poll()
         else:
-            self._unbind_mouse_clicks()
-            self.text.config(cursor="xterm")
+            self._release_mouse()
             self.mouse_btn.config(bg="#333", fg="#aaa", text="Mouse (Ctrl+Esc)")
         return "break"
 
-    def _bind_mouse_clicks(self):
-        """Bind click/scroll events (only work when window is focused)."""
-        self.text.config(cursor="crosshair")
+    def _capture_mouse(self):
+        self.root.config(cursor="none")
+        self.text.config(cursor="none")
         self.text.bind("<Button-1>", self._mouse_click_left)
         self.text.bind("<Button-2>", self._mouse_click_right)
         self.text.bind("<Button-3>", self._mouse_click_right)
         self.text.bind("<MouseWheel>", self._mouse_scroll)
+        try:
+            self.root.grab_set_global()
+        except tk.TclError:
+            pass
 
-    def _unbind_mouse_clicks(self):
+    def _release_mouse(self):
+        try:
+            self.root.grab_release()
+        except tk.TclError:
+            pass
+        self.root.config(cursor="")
+        self.text.config(cursor="xterm")
         self.text.unbind("<Button-1>")
         self.text.unbind("<Button-2>")
         self.text.unbind("<Button-3>")
