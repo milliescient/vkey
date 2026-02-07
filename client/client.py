@@ -169,15 +169,20 @@ class VKeyboardApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("vkeyboard")
-        self.root.geometry("540x380")
+        self.root.geometry("540x560")
         self.root.configure(bg="#1e1e1e")
         self.root.resizable(True, True)
 
         self.transport = JsonTransport()
         self.transport.on_status_change = self._on_status_change
 
+        self._tp_last_x = 0
+        self._tp_last_y = 0
+        self._tp_moved = 0
+
         self._build_ui()
         self._bind_keys()
+        self._bind_trackpad()
 
     def _build_ui(self):
         r = self.root
@@ -245,7 +250,53 @@ class VKeyboardApp:
         sep = tk.Frame(r, bg="#333", height=1)
         sep.pack(fill=tk.X)
 
-        # -- Typing surface --
+        # -- Bottom bar (pack to BOTTOM first to reserve space) --
+        bottom = tk.Frame(r, bg="#252526", padx=10, pady=4)
+        bottom.pack(fill=tk.X, side=tk.BOTTOM)
+
+        self.info_label = tk.Label(
+            bottom,
+            text="Cmd maps to Ctrl on remote.",
+            fg="#666",
+            bg="#252526",
+            font=tkfont.Font(family="Menlo", size=10),
+        )
+        self.info_label.pack(side=tk.LEFT)
+
+        tk.Button(
+            bottom,
+            text="Clear",
+            font=tkfont.Font(family="Menlo", size=10),
+            bg="#333",
+            fg="#aaa",
+            activebackground="#444",
+            activeforeground="#ccc",
+            relief=tk.FLAT,
+            padx=8,
+            command=self._clear_text,
+        ).pack(side=tk.RIGHT)
+
+        # -- Trackpad (pack to BOTTOM, above bottom bar) --
+        tp_frame = tk.Frame(r, bg="#1a1a1a")
+        tp_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        tp_frame.pack_propagate(False)
+        tp_frame.configure(height=180)
+
+        tp_label = tk.Label(
+            tp_frame, text="Trackpad", fg="#444", bg="#1a1a1a", font=small,
+            anchor=tk.W,
+        )
+        tp_label.pack(fill=tk.X, padx=10, pady=(4, 0))
+
+        self.trackpad = tk.Canvas(
+            tp_frame, bg="#1a1a1a", highlightthickness=0, cursor="crosshair",
+        )
+        self.trackpad.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+
+        tp_sep = tk.Frame(r, bg="#333", height=1)
+        tp_sep.pack(fill=tk.X, side=tk.BOTTOM)
+
+        # -- Typing surface (fills remaining space) --
         self.text = tk.Text(
             r,
             font=mono,
@@ -265,33 +316,6 @@ class VKeyboardApp:
 
         # Placeholder
         self._show_placeholder()
-
-        # -- Bottom bar --
-        bottom = tk.Frame(r, bg="#252526", padx=10, pady=4)
-        bottom.pack(fill=tk.X, side=tk.BOTTOM)
-
-        self.info_label = tk.Label(
-            bottom,
-            text="Type here when connected. Cmd maps to Ctrl on remote.",
-            fg="#666",
-            bg="#252526",
-            font=tkfont.Font(family="Menlo", size=10),
-        )
-        self.info_label.pack(side=tk.LEFT)
-
-        # Clear button
-        tk.Button(
-            bottom,
-            text="Clear",
-            font=tkfont.Font(family="Menlo", size=10),
-            bg="#333",
-            fg="#aaa",
-            activebackground="#444",
-            activeforeground="#ccc",
-            relief=tk.FLAT,
-            padx=8,
-            command=self._clear_text,
-        ).pack(side=tk.RIGHT)
 
     def _show_placeholder(self):
         if not self.text.get("1.0", "end-1c"):
@@ -329,6 +353,55 @@ class VKeyboardApp:
             for key in punct_keys:
                 self.text.bind(f"<{mod}-{key}>", self._on_key_press)
                 self.text.bind(f"<{mod}-Shift-{key}>", self._on_key_press)
+
+    def _bind_trackpad(self):
+        tp = self.trackpad
+        tp.bind("<ButtonPress-1>", self._tp_press)
+        tp.bind("<B1-Motion>", self._tp_drag)
+        tp.bind("<ButtonRelease-1>", self._tp_release)
+        tp.bind("<ButtonPress-2>", lambda e: self._tp_click(3))
+        tp.bind("<ButtonPress-3>", lambda e: self._tp_click(3))
+        tp.bind("<MouseWheel>", self._tp_scroll)
+        # Linux scroll events
+        tp.bind("<Button-4>", lambda e: self._tp_scroll_step(1))
+        tp.bind("<Button-5>", lambda e: self._tp_scroll_step(-1))
+
+    def _tp_press(self, event):
+        self._tp_last_x = event.x
+        self._tp_last_y = event.y
+        self._tp_moved = 0
+
+    def _tp_drag(self, event):
+        dx = event.x - self._tp_last_x
+        dy = event.y - self._tp_last_y
+        self._tp_last_x = event.x
+        self._tp_last_y = event.y
+        self._tp_moved += abs(dx) + abs(dy)
+        sensitivity = 2.0
+        self.transport.send({
+            "type": "mousemove",
+            "dx": dx * sensitivity,
+            "dy": dy * sensitivity,
+        })
+
+    def _tp_release(self, event):
+        if self._tp_moved < 5:
+            self._tp_click(1)
+
+    def _tp_click(self, button):
+        self.transport.send({"type": "click", "button": button})
+
+    def _tp_scroll(self, event):
+        # macOS: delta is ±1 per tick; Windows: ±120 per tick
+        if abs(event.delta) >= 120:
+            steps = event.delta // 120
+        else:
+            steps = event.delta
+        if steps:
+            self._tp_scroll_step(steps)
+
+    def _tp_scroll_step(self, dy):
+        self.transport.send({"type": "scroll", "dy": dy})
 
     def _on_key_press(self, event):
         self._clear_placeholder()

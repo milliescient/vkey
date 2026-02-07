@@ -220,6 +220,42 @@ function sendKeystroke(combo) {
   }
 }
 
+// --- Mouse ---
+
+function sendMouseMove(dx, dy) {
+  const env = { ...process.env, DISPLAY, XAUTHORITY };
+  execFile(
+    "xdotool",
+    ["mousemove_relative", "--", String(Math.round(dx)), String(Math.round(dy))],
+    { env },
+    (err) => {
+      if (err) console.error(`  xdotool error: ${err.message}`);
+    }
+  );
+}
+
+function sendMouseClick(button) {
+  const env = { ...process.env, DISPLAY, XAUTHORITY };
+  execFile("xdotool", ["click", String(button)], { env }, (err) => {
+    if (err) console.error(`  xdotool error: ${err.message}`);
+  });
+}
+
+function sendScroll(dy) {
+  const env = { ...process.env, DISPLAY, XAUTHORITY };
+  // button 4 = scroll up, button 5 = scroll down
+  const button = dy > 0 ? 4 : 5;
+  const count = Math.abs(Math.round(dy)) || 1;
+  execFile(
+    "xdotool",
+    ["click", "--repeat", String(count), String(button)],
+    { env },
+    (err) => {
+      if (err) console.error(`  xdotool error: ${err.message}`);
+    }
+  );
+}
+
 // --- Server ---
 
 const wss = new WebSocketServer({ host: "0.0.0.0", port: PORT });
@@ -242,6 +278,21 @@ wss.on("connection", (ws, req) => {
 
     if (msg.type === "ping") {
       ws.send(JSON.stringify({ type: "pong" }));
+      return;
+    }
+
+    // --- Mouse events ---
+    if (msg.type === "mousemove") {
+      sendMouseMove(msg.dx, msg.dy);
+      return;
+    }
+    if (msg.type === "click") {
+      console.log(`  mouse: click ${msg.button}`);
+      sendMouseClick(msg.button);
+      return;
+    }
+    if (msg.type === "scroll") {
+      sendScroll(msg.dy);
       return;
     }
 
