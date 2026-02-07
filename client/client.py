@@ -178,6 +178,7 @@ class VKeyboardApp:
 
         self._mouse_enabled = False
         self._mouse_last_pos = None
+        self._focused = True
 
         self._build_ui()
         self._bind_keys()
@@ -355,10 +356,12 @@ class VKeyboardApp:
                 self.text.bind(f"<{mod}-Shift-{key}>", self._on_key_press)
 
     def _on_focus_out(self, event):
-        pass  # global grab keeps mouse captured across focus changes
+        self._focused = False
 
     def _on_focus_in(self, event):
+        self._focused = True
         if self._mouse_enabled:
+            self._mouse_last_pos = None  # avoid stale delta on re-focus
             try:
                 self.root.grab_set_global()
             except tk.TclError:
@@ -403,15 +406,16 @@ class VKeyboardApp:
     def _mouse_poll(self):
         if not self._mouse_enabled:
             return
-        x = self.root.winfo_pointerx()
-        y = self.root.winfo_pointery()
-        if (x, y) != self._mouse_last_pos:
-            self._mouse_last_pos = (x, y)
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            nx = max(0.0, min(1.0, x / sw))
-            ny = max(0.0, min(1.0, y / sh))
-            self.transport.send({"type": "mousemove_abs", "x": nx, "y": ny})
+        if self._focused:
+            x = self.root.winfo_pointerx()
+            y = self.root.winfo_pointery()
+            if (x, y) != self._mouse_last_pos:
+                self._mouse_last_pos = (x, y)
+                sw = self.root.winfo_screenwidth()
+                sh = self.root.winfo_screenheight()
+                nx = max(0.0, min(1.0, x / sw))
+                ny = max(0.0, min(1.0, y / sh))
+                self.transport.send({"type": "mousemove_abs", "x": nx, "y": ny})
         self.root.after(16, self._mouse_poll)  # ~60fps
 
     def _mouse_click_left(self, event):
