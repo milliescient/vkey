@@ -169,20 +169,20 @@ class VKeyboardApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("vkeyboard")
-        self.root.geometry("540x560")
+        self.root.geometry("540x380")
         self.root.configure(bg="#1e1e1e")
         self.root.resizable(True, True)
 
         self.transport = JsonTransport()
         self.transport.on_status_change = self._on_status_change
 
-        self._tp_last_x = 0
-        self._tp_last_y = 0
-        self._tp_moved = 0
+        self._mouse_enabled = False   # user intent (F9 toggle)
+        self._mouse_active = False    # polling loop running
 
         self._build_ui()
         self._bind_keys()
-        self._bind_trackpad()
+        self.root.bind("<FocusOut>", self._on_focus_out)
+        self.root.bind("<FocusIn>", self._on_focus_in)
 
     def _build_ui(self):
         r = self.root
@@ -276,25 +276,19 @@ class VKeyboardApp:
             command=self._clear_text,
         ).pack(side=tk.RIGHT)
 
-        # -- Trackpad (pack to BOTTOM, above bottom bar) --
-        tp_frame = tk.Frame(r, bg="#1a1a1a")
-        tp_frame.pack(fill=tk.X, side=tk.BOTTOM)
-        tp_frame.pack_propagate(False)
-        tp_frame.configure(height=180)
-
-        tp_label = tk.Label(
-            tp_frame, text="Trackpad", fg="#444", bg="#1a1a1a", font=small,
-            anchor=tk.W,
+        self.mouse_btn = tk.Button(
+            bottom,
+            text="Mouse (F9)",
+            font=tkfont.Font(family="Menlo", size=10),
+            bg="#333",
+            fg="#aaa",
+            activebackground="#444",
+            activeforeground="#ccc",
+            relief=tk.FLAT,
+            padx=8,
+            command=self._toggle_mouse,
         )
-        tp_label.pack(fill=tk.X, padx=10, pady=(4, 0))
-
-        self.trackpad = tk.Canvas(
-            tp_frame, bg="#1a1a1a", highlightthickness=0, cursor="crosshair",
-        )
-        self.trackpad.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
-
-        tp_sep = tk.Frame(r, bg="#333", height=1)
-        tp_sep.pack(fill=tk.X, side=tk.BOTTOM)
+        self.mouse_btn.pack(side=tk.RIGHT, padx=(0, 6))
 
         # -- Typing surface (fills remaining space) --
         self.text = tk.Text(
@@ -339,6 +333,8 @@ class VKeyboardApp:
     def _bind_keys(self):
         # Bind to the text widget so it only fires when the window is focused
         self.text.bind("<KeyPress>", self._on_key_press)
+        # F9 toggles mouse capture (bound specifically so it overrides KeyPress)
+        self.text.bind("<F9>", self._toggle_mouse)
         # Prevent default text widget behavior for modifier combos
         # so we don't get stray characters
         punct_keys = [
@@ -354,54 +350,75 @@ class VKeyboardApp:
                 self.text.bind(f"<{mod}-{key}>", self._on_key_press)
                 self.text.bind(f"<{mod}-Shift-{key}>", self._on_key_press)
 
-    def _bind_trackpad(self):
-        tp = self.trackpad
-        tp.bind("<ButtonPress-1>", self._tp_press)
-        tp.bind("<B1-Motion>", self._tp_drag)
-        tp.bind("<ButtonRelease-1>", self._tp_release)
-        tp.bind("<ButtonPress-2>", lambda e: self._tp_click(3))
-        tp.bind("<ButtonPress-3>", lambda e: self._tp_click(3))
-        tp.bind("<MouseWheel>", self._tp_scroll)
-        # Linux scroll events
-        tp.bind("<Button-4>", lambda e: self._tp_scroll_step(1))
-        tp.bind("<Button-5>", lambda e: self._tp_scroll_step(-1))
+    def _on_focus_out(self, event):
+        self._deactivate_mouse()
 
-    def _tp_press(self, event):
-        self._tp_last_x = event.x
-        self._tp_last_y = event.y
-        self._tp_moved = 0
+    def _on_focus_in(self, event):
+        if self._mouse_enabled:
+            self._activate_mouse()
 
-    def _tp_drag(self, event):
-        dx = event.x - self._tp_last_x
-        dy = event.y - self._tp_last_y
-        self._tp_last_x = event.x
-        self._tp_last_y = event.y
-        self._tp_moved += abs(dx) + abs(dy)
-        sensitivity = 2.0
-        self.transport.send({
-            "type": "mousemove",
-            "dx": dx * sensitivity,
-            "dy": dy * sensitivity,
-        })
+    def _toggle_mouse(self, event=None):
+        self._mouse_enabled = not self._mouse_enabled
+        if self._mouse_enabled:
+            self._activate_mouse()
+            self.mouse_btn.config(bg="#6c2020", fg="#fff", text="Mouse ON")
+        else:
+            self._deactivate_mouse()
+            self.mouse_btn.config(bg="#333", fg="#aaa", text="Mouse (F9)")
+        return "break"
 
-    def _tp_release(self, event):
-        if self._tp_moved < 5:
-            self._tp_click(1)
+    def _activate_mouse(self):
+        if self._mouse_active:
+            return
+        self._mouse_active = True
+        self.text.config(cursor="crosshair")
+        self.text.bind("<Button-1>", self._mouse_click_left)
+        self.text.bind("<Button-2>", self._mouse_click_right)
+        self.text.bind("<Button-3>", self._mouse_click_right)
+        self.text.bind("<MouseWheel>", self._mouse_scroll)
+        self._mouse_last_pos = None
+        self._mouse_poll()
 
-    def _tp_click(self, button):
-        self.transport.send({"type": "click", "button": button})
+    def _deactivate_mouse(self):
+        if not self._mouse_active:
+            return
+        self._mouse_active = False
+        self.text.config(cursor="xterm")
+        self.text.unbind("<Button-1>")
+        self.text.unbind("<Button-2>")
+        self.text.unbind("<Button-3>")
+        self.text.unbind("<MouseWheel>")
 
-    def _tp_scroll(self, event):
-        # macOS: delta is ±1 per tick; Windows: ±120 per tick
+    def _mouse_poll(self):
+        if not self._mouse_active:
+            return
+        x = self.root.winfo_pointerx()
+        y = self.root.winfo_pointery()
+        if (x, y) != self._mouse_last_pos:
+            self._mouse_last_pos = (x, y)
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            nx = max(0.0, min(1.0, x / sw))
+            ny = max(0.0, min(1.0, y / sh))
+            self.transport.send({"type": "mousemove_abs", "x": nx, "y": ny})
+        self.root.after(16, self._mouse_poll)  # ~60fps
+
+    def _mouse_click_left(self, event):
+        self.transport.send({"type": "click", "button": 1})
+        return "break"
+
+    def _mouse_click_right(self, event):
+        self.transport.send({"type": "click", "button": 3})
+        return "break"
+
+    def _mouse_scroll(self, event):
         if abs(event.delta) >= 120:
             steps = event.delta // 120
         else:
             steps = event.delta
         if steps:
-            self._tp_scroll_step(steps)
-
-    def _tp_scroll_step(self, dy):
-        self.transport.send({"type": "scroll", "dy": dy})
+            self.transport.send({"type": "scroll", "dy": steps})
+        return "break"
 
     def _on_key_press(self, event):
         self._clear_placeholder()

@@ -1,5 +1,5 @@
 const { WebSocketServer } = require("ws");
-const { execFile } = require("child_process");
+const { execFile, execFileSync } = require("child_process");
 
 const { readdirSync, existsSync } = require("fs");
 
@@ -30,6 +30,19 @@ function detectXauthority() {
 
 const DISPLAY = detectDisplay();
 const XAUTHORITY = detectXauthority();
+
+// Detect screen resolution for absolute mouse positioning
+let SCREEN_W = 1920, SCREEN_H = 1080;
+try {
+  const geo = execFileSync("xdotool", ["getdisplaygeometry"], {
+    env: { ...process.env, DISPLAY, XAUTHORITY },
+    encoding: "utf-8",
+  }).trim();
+  const [w, h] = geo.split(" ").map(Number);
+  if (w && h) { SCREEN_W = w; SCREEN_H = h; }
+} catch {
+  console.error("Could not detect screen resolution, defaulting to 1920x1080");
+}
 
 // Map browser KeyboardEvent.code / key values to xdotool key names
 const KEY_MAP = {
@@ -222,6 +235,15 @@ function sendKeystroke(combo) {
 
 // --- Mouse ---
 
+function sendMouseMoveAbs(x, y) {
+  const env = { ...process.env, DISPLAY, XAUTHORITY };
+  const px = Math.round(x * SCREEN_W);
+  const py = Math.round(y * SCREEN_H);
+  execFile("xdotool", ["mousemove", String(px), String(py)], { env }, (err) => {
+    if (err) console.error(`  xdotool error: ${err.message}`);
+  });
+}
+
 function sendMouseMove(dx, dy) {
   const env = { ...process.env, DISPLAY, XAUTHORITY };
   execFile(
@@ -262,6 +284,7 @@ const wss = new WebSocketServer({ host: "0.0.0.0", port: PORT });
 
 console.log(`vkeyboard server listening on 0.0.0.0:${PORT}`);
 console.log(`Using X11 display: ${DISPLAY}${XAUTHORITY ? `, auth: ${XAUTHORITY}` : ""}`);
+console.log(`Screen resolution: ${SCREEN_W}x${SCREEN_H}`);
 console.log("Waiting for connections...\n");
 
 wss.on("connection", (ws, req) => {
@@ -282,6 +305,10 @@ wss.on("connection", (ws, req) => {
     }
 
     // --- Mouse events ---
+    if (msg.type === "mousemove_abs") {
+      sendMouseMoveAbs(msg.x, msg.y);
+      return;
+    }
     if (msg.type === "mousemove") {
       sendMouseMove(msg.dx, msg.dy);
       return;
