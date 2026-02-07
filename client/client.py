@@ -177,7 +177,7 @@ class VKeyboardApp:
         self.transport.on_status_change = self._on_status_change
 
         self._mouse_enabled = False   # user intent (F9 toggle)
-        self._mouse_active = False    # polling loop running
+        self._mouse_last_pos = None
 
         self._build_ui()
         self._bind_keys()
@@ -351,46 +351,41 @@ class VKeyboardApp:
                 self.text.bind(f"<{mod}-Shift-{key}>", self._on_key_press)
 
     def _on_focus_out(self, event):
-        self._deactivate_mouse()
+        self._unbind_mouse_clicks()
 
     def _on_focus_in(self, event):
         if self._mouse_enabled:
-            self._activate_mouse()
+            self._bind_mouse_clicks()
 
     def _toggle_mouse(self, event=None):
         self._mouse_enabled = not self._mouse_enabled
         if self._mouse_enabled:
-            self._activate_mouse()
+            self._bind_mouse_clicks()
             self.mouse_btn.config(bg="#6c2020", fg="#fff", text="Mouse ON")
+            self._mouse_last_pos = None
+            self._mouse_poll()
         else:
-            self._deactivate_mouse()
+            self._unbind_mouse_clicks()
+            self.text.config(cursor="xterm")
             self.mouse_btn.config(bg="#333", fg="#aaa", text="Mouse (F9)")
         return "break"
 
-    def _activate_mouse(self):
-        if self._mouse_active:
-            return
-        self._mouse_active = True
+    def _bind_mouse_clicks(self):
+        """Bind click/scroll events (only work when window is focused)."""
         self.text.config(cursor="crosshair")
         self.text.bind("<Button-1>", self._mouse_click_left)
         self.text.bind("<Button-2>", self._mouse_click_right)
         self.text.bind("<Button-3>", self._mouse_click_right)
         self.text.bind("<MouseWheel>", self._mouse_scroll)
-        self._mouse_last_pos = None
-        self._mouse_poll()
 
-    def _deactivate_mouse(self):
-        if not self._mouse_active:
-            return
-        self._mouse_active = False
-        self.text.config(cursor="xterm")
+    def _unbind_mouse_clicks(self):
         self.text.unbind("<Button-1>")
         self.text.unbind("<Button-2>")
         self.text.unbind("<Button-3>")
         self.text.unbind("<MouseWheel>")
 
     def _mouse_poll(self):
-        if not self._mouse_active:
+        if not self._mouse_enabled:
             return
         x = self.root.winfo_pointerx()
         y = self.root.winfo_pointery()
