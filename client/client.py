@@ -31,6 +31,7 @@ if platform.system() == "Darwin":
             kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
             kCGEventLeftMouseDown, kCGEventRightMouseDown,
             kCGEventScrollWheel, kCGScrollWheelEventDeltaAxis1,
+            kCGEventTapDisabledByTimeout,
             kCFRunLoopCommonModes,
             CGDisplayHideCursor, CGDisplayShowCursor,
             CGMainDisplayID,
@@ -474,19 +475,25 @@ class VKeyboardApp:
             return
 
         transport = self.transport
+        tap_ref = [None]  # mutable ref for closure
 
         def tap_callback(proxy, event_type, event, refcon):
+            if event_type == kCGEventTapDisabledByTimeout:
+                # macOS disabled the tap — re-enable it
+                if tap_ref[0]:
+                    CGEventTapEnable(tap_ref[0], True)
+                return event
             if event_type == kCGEventLeftMouseDown:
                 transport.send({"type": "click", "button": 1})
-                return None  # suppress the click
+                return None
             elif event_type == kCGEventRightMouseDown:
                 transport.send({"type": "click", "button": 3})
-                return None  # suppress the click
+                return None
             elif event_type == kCGEventScrollWheel:
                 dy = CGEventGetIntegerValueField(event, kCGScrollWheelEventDeltaAxis1)
                 if dy:
                     transport.send({"type": "scroll", "dy": dy})
-                return None  # suppress the scroll
+                return None
             return event
 
         def run_tap():
@@ -507,6 +514,7 @@ class VKeyboardApp:
                 if not tap:
                     print("Failed to create event tap. Grant Accessibility permissions in System Preferences.")
                     return
+                tap_ref[0] = tap
             except Exception as e:
                 print(f"Event tap error: {e}")
                 return
