@@ -394,7 +394,7 @@ class VKeyboardApp:
         return frontmost and frontmost.processIdentifier() == os.getpid()
 
     def _frontmost_poll(self):
-        """Poll every 250ms to detect Cmd+Tab away/back."""
+        """Poll to detect Cmd+Tab away/back."""
         if not self._mouse_enabled:
             return
 
@@ -414,7 +414,7 @@ class VKeyboardApp:
             self.mouse_btn.config(bg="#6c2020", fg="#fff", text="Mouse ON")
             return  # _capture_mouse already starts a new _frontmost_poll
 
-        self.root.after(250, self._frontmost_poll)
+        self.root.after(50, self._frontmost_poll)
 
 
     def _toggle_mouse(self, event=None):
