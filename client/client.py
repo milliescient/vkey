@@ -132,11 +132,13 @@ class JsonTransport:
         self._loop = None
         self._thread = None
         self._url = None
+        self._should_run = False
         self.connected = False
         self.on_status_change = None  # callback(connected: bool)
 
     def start(self, url):
         self._url = url
+        self._should_run = True
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -146,7 +148,7 @@ class JsonTransport:
         self._loop.run_until_complete(self._connect_loop())
 
     async def _connect_loop(self):
-        while True:
+        while self._should_run:
             try:
                 async with ws_connect(self._url) as ws:
                     self._ws = ws
@@ -164,7 +166,8 @@ class JsonTransport:
                 self.connected = False
                 if self.on_status_change:
                     self.on_status_change(False)
-            await asyncio.sleep(1)
+            if self._should_run:
+                await asyncio.sleep(1)
 
     def send(self, obj):
         ws = self._ws
@@ -178,6 +181,7 @@ class JsonTransport:
             pass
 
     def disconnect(self):
+        self._should_run = False
         ws = self._ws
         if ws and self._loop:
             asyncio.run_coroutine_threadsafe(ws.close(), self._loop)
@@ -425,6 +429,7 @@ class VKeyboardApp:
             self._mouse_last_pos = None
             self._mouse_poll()
         else:
+            self._mouse_paused = False
             self._release_mouse()
             self.mouse_btn.config(bg="#333", fg="#aaa", text="Mouse (Ctrl+Esc)")
         return "break"
@@ -445,15 +450,13 @@ class VKeyboardApp:
 
         disable_widget(self.root)
 
-        # Start CGEvent tap to intercept clicks/scrolls globally
-        self._start_event_tap()
+        # Start CGEvent tap (only on first capture, stays alive across pause/resume)
+        if not self._event_tap_thread:
+            self._start_event_tap()
         # Start polling for app switch (Cmd+Tab detection)
         self._frontmost_poll()
 
     def _release_mouse(self):
-        # Stop event tap
-        self._stop_event_tap()
-
         # Show cursor
         if PYOBJC_AVAILABLE:
             CGDisplayShowCursor(CGMainDisplayID())
@@ -479,9 +482,11 @@ class VKeyboardApp:
 
         def tap_callback(proxy, event_type, event, refcon):
             if event_type == kCGEventTapDisabledByTimeout:
-                # macOS disabled the tap — re-enable it
                 if tap_ref[0]:
                     CGEventTapEnable(tap_ref[0], True)
+                return event
+            # When disabled or paused, let all events through
+            if not self._mouse_enabled or self._mouse_paused:
                 return event
             if event_type == kCGEventLeftMouseDown:
                 transport.send({"type": "click", "button": 1})
