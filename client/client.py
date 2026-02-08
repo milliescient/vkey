@@ -17,6 +17,25 @@ import threading
 import asyncio
 import tkinter as tk
 from tkinter import font as tkfont
+import platform
+
+# Try to import PyObjC/Quartz for macOS global mouse capture
+PYOBJC_AVAILABLE = False
+if platform.system() == "Darwin":
+    try:
+        from Quartz import (
+            CGEventTapCreate, CGEventTapEnable,
+            CGEventGetIntegerValueField,
+            CFMachPortCreateRunLoopSource, CFRunLoopAddSource,
+            CFRunLoopGetCurrent, CFRunLoopRun, CFRunLoopStop,
+            kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
+            kCGEventLeftMouseDown, kCGEventRightMouseDown,
+            kCGEventScrollWheel, kCGScrollWheelEventDeltaAxis1,
+            kCFRunLoopCommonModes,
+        )
+        PYOBJC_AVAILABLE = True
+    except ImportError:
+        print("Warning: PyObjC not available. Install with: pip install pyobjc-framework-Quartz")
 
 try:
     import websockets
@@ -112,9 +131,11 @@ class JsonTransport:
         self.on_status_change = None  # callback(connected: bool)
 
     def start(self, url):
+        print(f"DEBUG: JsonTransport.start called with url={url}")
         self._url = url
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        print("DEBUG: Background thread started")
 
     def _run(self):
         self._loop = asyncio.new_event_loop()
@@ -124,7 +145,9 @@ class JsonTransport:
     async def _connect_loop(self):
         while True:
             try:
+                print(f"DEBUG: Attempting to connect to {self._url}")
                 async with ws_connect(self._url) as ws:
+                    print("DEBUG: WebSocket connected!")
                     self._ws = ws
                     self.connected = True
                     if self.on_status_change:
@@ -133,8 +156,10 @@ class JsonTransport:
                     try:
                         await ws.recv()
                     except websockets.ConnectionClosed:
+                        print("DEBUG: WebSocket connection closed")
                         pass
-            except (OSError, websockets.WebSocketException):
+            except (OSError, websockets.WebSocketException) as e:
+                print(f"DEBUG: Connection error: {type(e).__name__}: {e}")
                 pass
             finally:
                 self._ws = None
@@ -142,6 +167,7 @@ class JsonTransport:
                 if self.on_status_change:
                     self.on_status_change(False)
             # Retry after a short delay
+            print("DEBUG: Retrying connection in 1 second...")
             await asyncio.sleep(1)
 
     def send(self, obj):
@@ -178,15 +204,17 @@ class VKeyboardApp:
 
         self._mouse_enabled = False
         self._mouse_last_pos = None
+        self._event_tap_thread = None
+        self._event_tap_loop = None
         self._focused = True
 
         self._build_ui()
         self._bind_keys()
         self.root.bind("<FocusOut>", self._on_focus_out)
         self.root.bind("<FocusIn>", self._on_focus_in)
+        # Don't use Activate/Deactivate - they fire too frequently and are noisy
 
-        # Enable mouse capture by default
-        self._toggle_mouse()
+        # Don't enable mouse by default - user needs to connect first
 
     def _build_ui(self):
         r = self.root
@@ -356,16 +384,34 @@ class VKeyboardApp:
                 self.text.bind(f"<{mod}-Shift-{key}>", self._on_key_press)
 
     def _on_focus_out(self, event):
-        self._focused = False
+        print(f"DEBUG: Focus OUT - widget={event.widget}")
+        # If mouse is enabled, check if we should steal focus back
+        # (this happens when clicking outside but we want to stay focused)
+        if self._mouse_enabled:
+            # Schedule a check to see if we're still the frontmost app
+            self.root.after(50, self._check_refocus)
+        else:
+            self._focused = False
+
+    def _check_refocus(self):
+        """Steal focus back if mouse is captured (user didn't Cmd+Tab away)."""
+        if not self._mouse_enabled:
+            return
+        # If mouse is still enabled, we want to keep focus
+        self.root.focus_force()
+        self._focused = True
 
     def _on_focus_in(self, event):
+        print(f"DEBUG: Focus IN - widget={event.widget}")
         self._focused = True
         if self._mouse_enabled:
             self._mouse_last_pos = None  # avoid stale delta on re-focus
+            # Re-establish global grab
             try:
                 self.root.grab_set_global()
             except tk.TclError:
                 pass
+
 
     def _toggle_mouse(self, event=None):
         self._mouse_enabled = not self._mouse_enabled
@@ -380,60 +426,149 @@ class VKeyboardApp:
         return "break"
 
     def _capture_mouse(self):
+        # Hide cursor everywhere
         self.root.config(cursor="none")
         self.text.config(cursor="none")
-        self.text.bind("<Button-1>", self._mouse_click_left)
-        self.text.bind("<Button-2>", self._mouse_click_right)
-        self.text.bind("<Button-3>", self._mouse_click_right)
-        self.text.bind("<MouseWheel>", self._mouse_scroll)
+
+        # Disable all widgets to prevent interaction
+        def disable_widget(widget):
+            try:
+                widget.config(state='disabled')
+            except:
+                pass
+            for child in widget.winfo_children():
+                disable_widget(child)
+
+        disable_widget(self.root)
+
+        # Use global grab to keep focus
         try:
             self.root.grab_set_global()
-        except tk.TclError:
+        except tk.TclError as e:
+            print(f"DEBUG: Failed to set global grab: {e}")
+
+        try:
+            self.root.attributes('-topmost', True)
+        except:
             pass
 
+        # Start CGEvent tap to intercept clicks/scrolls globally
+        self._start_event_tap()
+
     def _release_mouse(self):
+        # Stop event tap
+        self._stop_event_tap()
+
         try:
             self.root.grab_release()
         except tk.TclError:
             pass
+
+        # Remove topmost
+        try:
+            self.root.attributes('-topmost', False)
+        except:
+            pass
+
+        # Restore cursor
         self.root.config(cursor="")
         self.text.config(cursor="xterm")
-        self.text.unbind("<Button-1>")
-        self.text.unbind("<Button-2>")
-        self.text.unbind("<Button-3>")
-        self.text.unbind("<MouseWheel>")
+
+        # Re-enable all widgets
+        def enable_widget(widget):
+            try:
+                widget.config(state='normal')
+            except:
+                pass
+            for child in widget.winfo_children():
+                enable_widget(child)
+
+        enable_widget(self.root)
+
+    def _start_event_tap(self):
+        """Start a CGEvent tap to intercept mouse clicks/scrolls globally."""
+        print(f"DEBUG: _start_event_tap called, PYOBJC_AVAILABLE={PYOBJC_AVAILABLE}")
+        if not PYOBJC_AVAILABLE:
+            print("DEBUG: PyObjC not available, skipping event tap")
+            return
+
+        transport = self.transport
+
+        def tap_callback(proxy, event_type, event, refcon):
+            if event_type == kCGEventLeftMouseDown:
+                transport.send({"type": "click", "button": 1})
+                return None  # suppress the click
+            elif event_type == kCGEventRightMouseDown:
+                transport.send({"type": "click", "button": 3})
+                return None  # suppress the click
+            elif event_type == kCGEventScrollWheel:
+                dy = CGEventGetIntegerValueField(event, kCGScrollWheelEventDeltaAxis1)
+                if dy:
+                    transport.send({"type": "scroll", "dy": dy})
+                return None  # suppress the scroll
+            return event
+
+        def run_tap():
+            try:
+                mask = (
+                    (1 << kCGEventLeftMouseDown) |
+                    (1 << kCGEventRightMouseDown) |
+                    (1 << kCGEventScrollWheel)
+                )
+                print(f"DEBUG: Creating event tap with mask={mask}")
+                tap = CGEventTapCreate(
+                    kCGSessionEventTap,
+                    kCGHeadInsertEventTap,
+                    kCGEventTapOptionDefault,
+                    mask,
+                    tap_callback,
+                    None,
+                )
+                print(f"DEBUG: CGEventTapCreate returned: {tap}")
+                if not tap:
+                    print("DEBUG: Failed to create event tap. Grant accessibility permissions:")
+                    print("DEBUG: System Preferences > Security & Privacy > Privacy > Accessibility")
+                    print("DEBUG: Add Terminal (or your Python app) to the list")
+                    return
+            except Exception as e:
+                print(f"DEBUG: Exception creating event tap: {e}")
+                import traceback; traceback.print_exc()
+                return
+
+            source = CFMachPortCreateRunLoopSource(None, tap, 0)
+            loop = CFRunLoopGetCurrent()
+            self._event_tap_loop = loop
+            CFRunLoopAddSource(loop, source, kCFRunLoopCommonModes)
+            CGEventTapEnable(tap, True)
+            print("DEBUG: CGEvent tap started")
+            CFRunLoopRun()
+            print("DEBUG: CGEvent tap stopped")
+
+        self._event_tap_thread = threading.Thread(target=run_tap, daemon=True)
+        self._event_tap_thread.start()
+
+    def _stop_event_tap(self):
+        """Stop the CGEvent tap."""
+        if self._event_tap_loop:
+            CFRunLoopStop(self._event_tap_loop)
+            self._event_tap_loop = None
+            self._event_tap_thread = None
 
     def _mouse_poll(self):
         if not self._mouse_enabled:
             return
-        if self._focused:
-            x = self.root.winfo_pointerx()
-            y = self.root.winfo_pointery()
-            if (x, y) != self._mouse_last_pos:
-                self._mouse_last_pos = (x, y)
-                sw = self.root.winfo_screenwidth()
-                sh = self.root.winfo_screenheight()
-                nx = max(0.0, min(1.0, x / sw))
-                ny = max(0.0, min(1.0, y / sh))
-                self.transport.send({"type": "mousemove_abs", "x": nx, "y": ny})
+
+        x = self.root.winfo_pointerx()
+        y = self.root.winfo_pointery()
+        if (x, y) != self._mouse_last_pos:
+            self._mouse_last_pos = (x, y)
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            nx = max(0.0, min(1.0, x / sw))
+            ny = max(0.0, min(1.0, y / sh))
+            self.transport.send({"type": "mousemove_abs", "x": nx, "y": ny})
+
         self.root.after(16, self._mouse_poll)  # ~60fps
-
-    def _mouse_click_left(self, event):
-        self.transport.send({"type": "click", "button": 1})
-        return "break"
-
-    def _mouse_click_right(self, event):
-        self.transport.send({"type": "click", "button": 3})
-        return "break"
-
-    def _mouse_scroll(self, event):
-        if abs(event.delta) >= 120:
-            steps = event.delta // 120
-        else:
-            steps = event.delta
-        if steps:
-            self.transport.send({"type": "scroll", "dy": steps})
-        return "break"
 
     def _on_key_press(self, event):
         self._clear_placeholder()
@@ -496,14 +631,20 @@ class VKeyboardApp:
         return None
 
     def _toggle_connection(self):
+        print("DEBUG: _toggle_connection called")
+        print(f"DEBUG: Button state: {self.connect_btn.cget('state')}")
         if self.transport.connected:
+            print("DEBUG: Disconnecting...")
             self.transport.disconnect()
         else:
             host = self.host_var.get().strip()
+            print(f"DEBUG: Host value: '{host}'")
             if not host:
+                print("DEBUG: No host specified, returning")
                 return
             if "://" not in host:
                 host = f"ws://{host}"
+            print(f"DEBUG: Connecting to: {host}")
             self.transport.start(host)
             self.status_label.config(text="Connecting...", fg="#ccaa00")
 
