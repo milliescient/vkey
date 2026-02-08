@@ -19,7 +19,7 @@ function detectDisplay() {
 // Auto-detect Xauthority file if not set
 function detectXauthority() {
   if (process.env.XAUTHORITY) return process.env.XAUTHORITY;
-  const uid = process.getuid?.() ?? 1000;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 1000;
   const candidates = [
     `/run/user/${uid}/gdm/Xauthority`,
     `${process.env.HOME}/.Xauthority`,
